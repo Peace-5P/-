@@ -2,18 +2,32 @@ import requests
 import os.path
 from dotenv import load_dotenv
 import logging
+import json
 
 
-dotenv_path = 'tokens.txt'
-if os.path.exists(dotenv_path):
-    load_dotenv(dotenv_path)
+def read_token():
+    dotenv_path = 'tokens.txt'
+    if os.path.exists(dotenv_path):
+        load_dotenv(dotenv_path)
+    vk_token = os.getenv('token_vk')
+    yandex_token = os.getenv('token_yandex')
+    return vk_token, yandex_token
 
-vk_token = os.getenv('token_vk')
-ya_token = os.getenv('token_yandex')
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-id = 646424782                               #<- указываем нужное ID пользователя в ВК
+def id_or_screenname():
+    """проверяет, является ли id числом,
+    если нет, то получаем id пользователя по screen_name"""
+    if id.isdigit():
+        user_id = id
+    else:
+        user_info = vk._get('users.get', user_ids=id, fields='id')
+        user_id = user_info['response'][0]['id']
+    return user_id
+
+
+def save_json(data, filename):
+    with open(filename + '.json', 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
 
 class VKconnect:
@@ -33,7 +47,7 @@ class VKconnect:
         response.raise_for_status()
         return response.json()
 
-    def photos_get(self, owner_id, album_id='profile', count=5):
+    def photos_get1(self, owner_id, album_id='profile', count=5):
         """Выдаёт список фотографий пользователя"""
         logger.info(f'Get photos from VK for user id {owner_id}, album id {album_id} and count {count}')
         return self._get('photos.get', owner_id=owner_id, album_id=album_id, count=count)
@@ -56,11 +70,13 @@ class VKconnect:
         logger.info(f'VK response: {date}')
         return date
 
+    def photos_get(self, owner_id, album_id='profile', count=5):
+        """Выдаёт список фотографий пользователя"""
+        logger.info(f'Get photos from VK for user id {owner_id}, album id {album_id} and count {count}')
+        response = self._get('photos.get', owner_id=owner_id, album_id=album_id, count=count)
+        logger.debug(f'VK response: {response}')
+        return response
 
-vk = VKconnect(vk_token)
-user = vk.photos_get(id)
-user_likes = vk.get_likes_of_photos(user)
-date_photos = vk.get_date_of_photos(user)
 
 class Yandexconnect:
     _url = 'https://cloud-api.yandex.net/v1/disk/resources'
@@ -89,7 +105,7 @@ class Yandexconnect:
         logger.info(f'Create folder {folder_name} on Yandex')
         return self._put('?path=' + folder_name)
 
-    def upload_folder(self, folder_name, photo_url_list=[photo['sizes'][-1]['url'] for photo in user['response']['items']]):
+    def upload_folder(self, folder_name, photo_url_list):
         """Загружает фотографии в указанную папку на Яндекс.Диске"""
         logger.info(f'Upload folder {folder_name} to Yandex')
         for i, photo_url in enumerate(photo_url_list):
@@ -101,17 +117,28 @@ class Yandexconnect:
                       'url': photo_url}
             self._post('/upload', params=params)
 
-    def create_folder_and_upload(self, folder_name, photo_url_list=[photo['sizes'][-1]['url'] for photo in user['response']['items']]):
+    def create_folder_and_upload(self, folder_name, photo_url_list):
         """Создаёт папку на Яндекс.Диске и загружает туда фотографии"""
         logger.info(f'Create folder {folder_name} and upload it to Yandex')
         self.create_folder(folder_name)
         self.upload_folder(folder_name, photo_url_list)
 
 
-yandex = Yandexconnect(ya_token) #указываем токен яндекс из https://yandex.ru/dev/disk/poligon/
-yandex.create_folder_and_upload('images') # указываем название папки
-
-
-
-
-
+if __name__ == '__main__':
+    vk_token, ya_token = read_token()
+    vk = VKconnect(vk_token)
+    id = input('Введите id пользователя или его ник:')
+    count = int(input('Введите количество фотографий, которые хотите получить:'))
+    folder_name = input('Введите название папки для фотографий:')
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    user_id = id_or_screenname()
+    user = vk.photos_get(user_id, album_id='profile', count=count)
+    if 'error' in user:
+        logger.error('Ошибка получения фотографий')
+    else:
+        user_likes = vk.get_likes_of_photos(user)
+        date_photos = vk.get_date_of_photos(user)
+        yandex = Yandexconnect(ya_token)
+        yandex.create_folder_and_upload(folder_name, [photo['sizes'][-1]['url'] for photo in user['response']['items']])
+        save_json(user, folder_name)
